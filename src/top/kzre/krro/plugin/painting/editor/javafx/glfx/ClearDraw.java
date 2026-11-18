@@ -2,7 +2,7 @@ package top.kzre.krro.plugin.painting.editor.javafx.glfx;
 
 import com.huskerdev.openglfx.canvas.events.GLRenderEvent;
 import top.kzre.krro.canvas.gl.tile.ITiledTextureBlitter;
-import top.kzre.krro.canvas.gl.tile.TiledTextureBlitter;
+
 import static org.lwjgl.opengl.GL30.*;
 
 /**
@@ -25,6 +25,11 @@ public final class ClearDraw implements IFrameDraw {
         this.green = green;
         this.blue = blue;
         this.alpha = alpha;
+    }
+
+    public static ClearDraw fromRgba(float[] rgba){
+
+        return new ClearDraw(rgba[0], rgba[1], rgba[2], rgba[3]);
     }
 
     @Override

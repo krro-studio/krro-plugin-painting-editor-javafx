@@ -36,7 +36,7 @@ public final class CheckerDraw implements IFrameDraw {
     private final int y;
     private final int width;
     private final int height;
-    /// 逻辑视口尺寸——mat2d 所在的坐标空间，不是 FBO 物理尺寸
+    /// 逻辑视口尺寸（DIP）——mat2d 所在的坐标空间，不是 framebuffer 物理尺寸
     private final int viewportW;
     private final int viewportH;
     /// 视口变换的逆：逻辑屏幕 -> 图像坐标
@@ -69,7 +69,9 @@ public final class CheckerDraw implements IFrameDraw {
     public void consume(ITiledTextureBlitter blitter, GLRenderEvent event) {
         if (event == null) throw new IllegalArgumentException("event can't be null.");
         backgroundDraw.consume(blitter, event);
-        shader.draw(event.fbo, viewportW, viewportH,
+        // 光栅化范围用 framebuffer 物理尺寸，格子计算用逻辑视口——两者只在缩放屏下不一致
+        shader.draw(event.fbo, event.width, event.height,
+                viewportW, viewportH,
                 x, y, width, height, gridSize, mat2d);
     }
 

@@ -73,9 +73,16 @@
                 viewport]}
         @state-atom
         ^SerialExecutor gl-exec (.getExecutor ^GLRuntime gl-runtime)
-        viewport-w (.getWidth  gl-canvas)
-        viewport-h (.getHeight gl-canvas)
-        ]
+        viewport-w (int (.getWidth gl-canvas))
+        viewport-h (int (.getHeight gl-canvas))
+        ;; 画布还没建立时图像尺寸未知（首帧、reshap 早于 set-image-size!），
+        ;; 退化成整个视口——合成侧本来就这么取，棋盘格跟着同一个值，
+        ;; 否则 uImage 是 0x0，每个像素都算"图像范围外"，只剩一片灰。
+        image-w (if (pos? image-width) image-width viewport-w)
+        image-h (if (pos? image-height) image-height viewport-h)
+        view-mat2d-inv
+        (vp/viewport->mat2d-invert
+          (or viewport (vp/make-viewport)))]
     (plet>
       [canvas
        (executor/submit!
@@ -83,12 +90,8 @@
          scheduler
          layers
          :changes          changes
-         :image-width      (if (pos? image-width)
-                             image-width
-                             viewport-w)
-         :image-height     (if (pos? image-height)
-                             image-height
-                             viewport-h)
+         :image-width      image-w
+         :image-height     image-h
          :current-layer-id current-layer-id
          :viewport         viewport
          :viewport-w       viewport-w
@@ -100,19 +103,19 @@
            gl-exec
            ^Callable
            (fn []
-             ;; 帧提交 + fence 全部封装在 send 内部；canvas 为空或已关闭时跳过
-             (when (and canvas (not (.isClosed canvas)))
+             ;; 帧提交 + fence 全部封装在 send 内部。没有合成结果时传 nil——
+             ;; send 会退化成只投递背景，棋盘格因此首帧就能出现，
+             ;; 不必等到第一次有内容的重绘
+             (let [canvas (when (and canvas (not (.isClosed canvas))) canvas)]
                (.send ^GLSyncTiledTextureBlitter sync-blitter
                       canvas
                       (double viewport-w)
                       (double viewport-h)
-                      (CheckerDraw. (ClearDraw. 0.3 0.3 0.3 1)
+                      (CheckerDraw. (ClearDraw/fromRgba gray-bg)
                         checker (int checker-grid)
-                        0 0 (int image-width) (int image-height)
-                        (int viewport-w) (int viewport-h)
-                        (KMath/mat2dInv
-                          (vp/viewport->mat2d
-                            (or viewport (vp/make-viewport))))))))))]
+                        0 0 image-w image-h
+                        viewport-w viewport-h
+                        view-mat2d-inv))))))]
       (>| repaint-chan :dirty)
       (Platform/runLater
         (reify Runnable
