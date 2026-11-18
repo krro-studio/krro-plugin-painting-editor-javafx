@@ -1,10 +1,12 @@
-.PHONY: clean jar install
+.PHONY: clean compile test jar uberjar repl
+
+all: jar install
 
 clean:
-	clojure -T:build clean
+	clj -T:build clean
 
 jar:
-	clojure -T:build jar
+	clj -T:build jar
 
 install: jar
-	mvn install:install-file -Dfile=target/krro-plugin-painting-editor-javafx-0.1.0.jar -DpomFile=pom.xml
+	clj -T:build install

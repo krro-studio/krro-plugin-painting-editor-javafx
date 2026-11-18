@@ -10,24 +10,41 @@
    [top.kzre.krro.plugin.painting.editor.javafx.canvas.gl :as gl]
    [top.kzre.krro.plugin.painting.editor.javafx.canvas.protocol :refer [ICanvasKernel]]
    [top.kzre.krro.plugin.painting.editor.javafx.input.pointer :as pointer]
-   [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input])
+   [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input]
+   [top.kzre.krro.plugin.painting.core.viewport :as vp])
   (:import
-   (com.huskerdev.grapl.gl GLContext GLProfile)
-   (com.huskerdev.openglfx.canvas GLCanvas GLCanvas$Builder GLCanvas$Builder$ContextDescription$New)
-   (com.huskerdev.openglfx.canvas.events GLRenderEvent)
-   (com.huskerdev.openglfx.lwjgl LWJGLExecutor)
-   (java.lang AutoCloseable)
-   (java.util.concurrent Callable)
-   (java.util.function Consumer)
-   (javafx.application Platform)
-   (javafx.scene.canvas Canvas)
-   (javafx.scene.layout StackPane)
-   (top.kzre.krro.core.util SerialExecutor)
-   (top.kzre.krro.plugin.painting.editor.javafx.glfx GLRuntime GLSyncTiledTextureBlitter)))
+    (com.huskerdev.grapl.gl GLContext GLProfile)
+    (com.huskerdev.openglfx.canvas GLCanvas GLCanvas$Builder GLCanvas$Builder$ContextDescription$New)
+    (com.huskerdev.openglfx.canvas.events GLRenderEvent)
+    (com.huskerdev.openglfx.lwjgl LWJGLExecutor)
+    (java.lang AutoCloseable)
+    (java.util.concurrent Callable)
+    (java.util.function Consumer UnaryOperator)
+    (javafx.application Platform)
+    (javafx.scene.canvas Canvas)
+    (javafx.scene.layout StackPane)
+    (top.kzre.krro.canvas.gl.tile TiledTextureNormalBlitter)
+    (top.kzre.krro.core.util SerialExecutor)
+    (top.kzre.krro.plugin.painting.editor.javafx.glfx
+      CheckerDraw CheckerShader ClearDraw GLRuntime GLSyncTiledTextureBlitter)
+    (top.kzre.krro.util.math KMath)))
+
 
 ;; ═══════════════════════════════════════════════
 ;; 状态
 ;; ═══════════════════════════════════════════════
+
+(def ^:private gray-bg
+  "图像范围外的底色，与 CPU 上传路径 Upload.GRAY_ARGB 同色。"
+  (float-array [0.533 0.533 0.533 1.0]))
+
+(def ^:private checker-colors
+  "棋盘格两色，与 Upload.CHECKER_COLOR1/2 同色。"
+  [(float-array [0.8 0.8 0.8 1.0])
+   (float-array [0.533 0.533 0.533 1.0])])
+
+;; 格子边长取瓦片尺寸：放大到格子小于几个像素时不再有意义，缩小时代数够用。
+(def ^:private checker-grid pc/global-tile-size)
 
 (defn- make-state []
   (atom {:layers           nil
@@ -43,6 +60,7 @@
 
 (defn- request-render!
   [{:keys [sync-blitter
+           checker
            repaint-chan
            gl-runtime
            gl-canvas
@@ -56,7 +74,8 @@
         @state-atom
         ^SerialExecutor gl-exec (.getExecutor ^GLRuntime gl-runtime)
         viewport-w (.getWidth  gl-canvas)
-        viewport-h (.getHeight gl-canvas)]
+        viewport-h (.getHeight gl-canvas)
+        ]
     (plet>
       [canvas
        (executor/submit!
@@ -86,7 +105,14 @@
                (.send ^GLSyncTiledTextureBlitter sync-blitter
                       canvas
                       (double viewport-w)
-                      (double viewport-h))))))]
+                      (double viewport-h)
+                      (CheckerDraw. (ClearDraw. 0.3 0.3 0.3 1)
+                        checker (int checker-grid)
+                        0 0 (int image-width) (int image-height)
+                        (int viewport-w) (int viewport-h)
+                        (KMath/mat2dInv
+                          (vp/viewport->mat2d
+                            (or viewport (vp/make-viewport))))))))))]
       (>| repaint-chan :dirty)
       (Platform/runLater
         (reify Runnable
@@ -107,6 +133,7 @@
    ^GLSyncTiledTextureBlitter sync-blitter
    ;; 合成相关
    ^GLRuntime gl-runtime
+   ^CheckerShader checker
    scheduler
    render-task-id
    repaint-chan
@@ -149,10 +176,15 @@
                       #(close! repaint-chan)
                       (when sync-blitter
                         #(try
-                           ;;
                            (.close ^GLSyncTiledTextureBlitter sync-blitter)
                            (catch Throwable t
                              (log/warn t "sync-blitter close failed"))))
+                      ;; kernel 自持的 GLCanvas 会话资源
+                      (when checker
+                        #(try
+                           (.close ^CheckerShader checker)
+                           (catch Throwable t
+                             (log/warn t "checker close failed"))))
                       ;; 最后关上下文
                       (when gl-canvas #(.dispose ^GLCanvas gl-canvas))]]
           (when step
@@ -209,7 +241,13 @@
         (build-layout gl-runtime)
 
         render-task-id (str "gl-canvas-kernel-" (random-uuid))
-        sync-blitter   (GLSyncTiledTextureBlitter/create pc/global-tile-size)
+        ;; blitter 与棋盘格资源都跟 GLCanvas 的会话同寿，由 kernel 持有；
+        ;; 通道只投递帧，不再代管它们
+        gl-blitter     (TiledTextureNormalBlitter. (int pc/global-tile-size))
+        checker        (CheckerShader. gray-bg (first checker-colors) (second checker-colors))
+        ;; 空画布时清成完全透明——棋盘格靠 dst-over 垫在已有像素之下，
+        ;; 这里若清成不透明的灰，它就无处可落了
+        sync-blitter   (GLSyncTiledTextureBlitter/create gl-blitter)
         mouse-input    (pointer/make-pointer-input container on-event)
 
         scheduler      (scheduler-impl/make-scheduler
@@ -226,6 +264,7 @@
            :fx-container   container
            :sync-blitter   sync-blitter
            :gl-runtime     gl-runtime
+           :checker        checker
            :scheduler      scheduler
            :render-task-id render-task-id
            :repaint-chan   repaint-chan
@@ -238,7 +277,8 @@
       gl-canvas
       (reify Consumer
         (accept [_ event]
-          (.poll ^GLSyncTiledTextureBlitter sync-blitter ^GLRenderEvent event))))
+          (.poll ^GLSyncTiledTextureBlitter sync-blitter
+                 ^GLRenderEvent event))))
 
     ;; ── onReshapeEvent：surface 尺寸变化，触发一次重渲染 ──
     (.addOnReshapeEvent
