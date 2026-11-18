@@ -18,7 +18,8 @@
   [^GLRuntime gl-runtime]
   (let [tile-size pc/global-tile-size
         executor  (.getExecutor gl-runtime)
-        layout    (GLTiledTextureLayout/square 8 (int tile-size) 10)
+        ;; 8层. 10x10个瓦片
+        layout    (GLTiledTextureLayout/square 12 (int tile-size) 32)
         tex-pool  (NoGLTexturePool. executor)
         factory   (GLRgba8AtlasFactory. layout tex-pool)]
     (promise/from-completable-future
@@ -31,6 +32,7 @@
             (-> (GLCompositeFlyweight/builder)
                 (.glExecutor executor)
                 (.tileSize (int tile-size))
+                ;; 3个池子
                 (.atlasCapacity 3)
                 (.atlasFactory factory)
                 (.build)
