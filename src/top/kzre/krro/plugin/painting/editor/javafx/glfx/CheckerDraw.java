@@ -1,7 +1,6 @@
 package top.kzre.krro.plugin.painting.editor.javafx.glfx;
 
 import com.huskerdev.openglfx.canvas.events.GLRenderEvent;
-import top.kzre.krro.canvas.gl.tile.ITiledTextureBlitter;
 
 /**
  * 棋盘格绘制——装饰器。
@@ -34,17 +33,15 @@ public final class CheckerDraw implements IFrameDraw {
     /// 图像范围（图像坐标）
     private final int x;
     private final int y;
-    private final int width;
-    private final int height;
-    /// 逻辑视口尺寸（DIP）——mat2d 所在的坐标空间，不是 framebuffer 物理尺寸
-    private final double viewportW;
-    private final double viewportH;
+    private final int imageW;
+    private final int imageH;
     /// 视口变换的逆：逻辑屏幕 -> 图像坐标
-    private final float[] mat2d;
-
+    private final float[] viewTransformInv;
+    private final double dpi;
     public CheckerDraw(IFrameDraw backgroundDraw, CheckerShader shader, int gridSize,
                        int x, int y, int imageW, int imageH,
-                       double viewportW, double viewportH, float[] mat2d) {
+                       float[] viewTransformInv, double dpi) {
+        this.dpi = dpi;
         if (backgroundDraw == null) throw new IllegalArgumentException("backgroundDraw can't be null");
         if (shader == null) throw new IllegalArgumentException("shader can't be null");
         if (gridSize <= 0) throw new IllegalArgumentException("gridSize must be > 0: " + gridSize);
@@ -53,11 +50,10 @@ public final class CheckerDraw implements IFrameDraw {
         this.gridSize = gridSize;
         this.x = x;
         this.y = y;
-        this.width = imageW;
-        this.height = imageH;
-        this.viewportW = viewportW;
-        this.viewportH = viewportH;
-        this.mat2d = mat2d;
+        this.imageW = imageW;
+        this.imageH = imageH;
+        /// 逻辑视口尺寸（DIP）——mat2d 所在的坐标空间，不是 framebuffer 物理尺寸
+        this.viewTransformInv = viewTransformInv;
     }
 
     @Override
@@ -69,10 +65,10 @@ public final class CheckerDraw implements IFrameDraw {
     public void consume(FrameBlitter blitter, GLRenderEvent event) {
         if (event == null) throw new IllegalArgumentException("event can't be null.");
         backgroundDraw.consume(blitter, event);
+
         // 光栅化范围用 framebuffer 物理尺寸，格子计算用逻辑视口——两者只在缩放屏下不一致
         shader.draw(event.fbo, event.width, event.height,
-                viewportW, viewportH,
-                x, y, width, height, gridSize, mat2d);
+                x, y, imageW, imageH, gridSize, viewTransformInv, dpi);
     }
 
     @Override

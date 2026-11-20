@@ -28,8 +28,20 @@ public final class ClearDraw implements IFrameDraw {
     }
 
     public static ClearDraw fromRgba(float[] rgba){
-
+        if (rgba.length < 3){
+            throw new IllegalArgumentException("rgba");
+        }
+        if (rgba.length == 3){
+            return fromRgb(rgba);
+        }
         return new ClearDraw(rgba[0], rgba[1], rgba[2], rgba[3]);
+    }
+
+    public static ClearDraw fromRgb(float[] rgba){
+        if (rgba.length < 3){
+            throw new IllegalArgumentException("rgba");
+        }
+        return new ClearDraw(rgba[0], rgba[1], rgba[2], 1);
     }
 
     @Override

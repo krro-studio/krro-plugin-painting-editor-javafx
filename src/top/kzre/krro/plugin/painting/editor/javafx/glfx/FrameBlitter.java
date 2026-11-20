@@ -62,7 +62,7 @@ public class FrameBlitter implements AutoCloseable {
      *
      */
     public void send(TiledCanvas canvas,
-                     double width, double height,
+                     double viewWidth, double viewHeight,
                      IFrameDraw background,
                      FrameDrawFactory factory) {
         if (background == null) throw new NullPointerException("decorate can't be null");
@@ -75,7 +75,7 @@ public class FrameBlitter implements AutoCloseable {
         }
         glFlush();
         long fence = GL32.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        IFrameDraw frameDraw = factory.create(background, canvas, width, height, fence);
+        IFrameDraw frameDraw = factory.create(background, canvas, viewWidth, viewHeight, fence);
         if (frameDraw == null) return;
 
         frameChan.send(frameDraw);

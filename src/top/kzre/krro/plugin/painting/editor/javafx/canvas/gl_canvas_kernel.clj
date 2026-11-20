@@ -27,7 +27,7 @@
       CheckerDraw
       CheckerShader
       ClearDraw
-      GLRuntime
+      FrameSnapshot GLRuntime
       FrameBlitter)
     (top.kzre.krro.util.tile TiledCanvas)))
 
@@ -56,8 +56,8 @@
          :viewport         nil
          :closed?           false
          :gl-canvas-ready? false
-         ;; 最近一帧的拷贝
-         :last-canvas nil
+         ;; 最近一帧的拷贝 FrameSnapshot
+         :last-frame nil
          }))
 
 ;; ═══════════════════════════════════════════════
@@ -71,26 +71,23 @@
            state-atom]
     :as _kernel}]
   (let [{:keys [gl-canvas-ready? closed?
-               ^TiledCanvas last-canvas
-                image-width image-height
-                viewport]} @state-atom
-        viewport-w (.getWidth gl-canvas)
-        viewport-h (.getHeight gl-canvas)
+               ^FrameSnapshot last-frame
+                image-width image-height]}
+        @state-atom
+
         render-ready?
         (and
           (not closed?)
           gl-canvas-ready?
-          (some? last-canvas)
-          (not (.isClosed last-canvas))
-          (pos? viewport-w)
-          (pos? viewport-h)
+          (some? last-frame)
           (pos? image-width)
           (pos? image-height))
-        view-mat2d-inv
-        (vp/viewport->mat2d-invert
-          (or viewport (vp/make-viewport)))]
+      ]
     (when render-ready?
-      (let [canvas (.copy last-canvas)]
+      (let [viewport-w (.getViewportW last-frame)
+            viewport-h (.getViewportH last-frame)
+            view-mat2d-inv (.getViewMat2DInv last-frame)
+            canvas (.copy (.getCanvas last-frame))]
         (.send ^FrameBlitter sync-blitter
                canvas
                (double viewport-w)
@@ -98,8 +95,8 @@
                (CheckerDraw. (ClearDraw/fromRgba gray-bg)
                              checker-shader (int checker-grid)
                              0 0 image-width image-height
-                             viewport-w viewport-h
-                             view-mat2d-inv)
+                             view-mat2d-inv
+                             (.getDpi gl-canvas))
                (FrameBlitter/scaled gl-canvas))))
     ))
 
@@ -156,12 +153,13 @@
                  ;; send 会退化成只投递背景，棋盘格因此首帧就能出现，
                  ;; 不必等到第一次有内容的重绘
                  (let [^TiledCanvas canvas canvas
-                       copy (.copy canvas)
-                       [old _] (swap-vals! state-atom assoc :last-canvas copy)]
+                       copy (FrameSnapshot.
+                              (.copy canvas)
+                              viewport-w viewport-h view-mat2d-inv)
+                       [old _] (swap-vals! state-atom assoc :last-frame copy)]
                    ;; 保留旧帧
-                   (when-let [cached-canvas (:last-canvas old)]
-                     (when-not (.isClosed cached-canvas)
-                       (.close cached-canvas)))
+                   (when-let [last-frame (:last-frame old)]
+                     (.close last-frame))
                    (.send ^FrameBlitter sync-blitter
                           canvas
                           (double viewport-w)
@@ -169,9 +167,9 @@
                           (CheckerDraw. (ClearDraw/fromRgba gray-bg)
                                         checker-shader (int checker-grid)
                                         0 0 image-width image-height
-                                        viewport-w viewport-h
-                                        view-mat2d-inv)
-                          (FrameBlitter/stretched))))))]))
+                                        view-mat2d-inv
+                                        (.getDpi gl-canvas))
+                          (FrameBlitter/scaled gl-canvas))))))]))
       ;; 已经放弃的
       (promise/rejected
         (ex-info "invalid render state" {})))))
@@ -236,11 +234,11 @@
                            (.close ^FrameBlitter sync-blitter)
                            (catch Throwable t
                              (log/warn t "sync-blitter close failed"))))
-                      (when-let [^TiledCanvas cached (:last-canvas old)]
+                      (when-let [^TiledCanvas cached (:last-frame old)]
                         #(try
                            (.close cached)
                            (catch Throwable t
-                             (log/warn t "last-canvas close failed"))))
+                             (log/warn t "last-frame close failed"))))
                       ;; kernel 自持的 GLCanvas 会话资源
                       (when checker-shader
                         #(try

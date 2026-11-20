@@ -114,8 +114,6 @@ public final class CheckerShader implements AutoCloseable {
      * @param fbo           目标 framebuffer
      * @param fboWidth      framebuffer 物理宽，用于光栅化范围
      * @param fboHeight     framebuffer 物理高，用于光栅化范围
-     * @param viewportW     逻辑视口宽（与 {@code screenToImage} 同一坐标空间）
-     * @param viewportH     逻辑视口高
      * @param x             图像范围左上角 x（图像坐标）
      * @param y             图像范围左上角 y（图像坐标）
      * @param imageWidth    图像宽
@@ -124,14 +122,14 @@ public final class CheckerShader implements AutoCloseable {
      * @param screenToImage 逻辑屏幕 -> 图像坐标的 6 元素仿射逆矩阵
      */
     public void draw(int fbo, int fboWidth, int fboHeight,
-                     double viewportW, double viewportH,
                      int x, int y, int imageWidth, int imageHeight, int grid,
-                     float[] screenToImage) {
+                     float[] screenToImage,
+                     double dpi) {
         if (closed) {
             throw new IllegalStateException("CheckerShader is closed");
         }
         if (fbo == 0 || fboWidth <= 0 || fboHeight <= 0
-                || viewportW <= 0 || viewportH <= 0) {
+               ) {
             return;
         }
         if (screenToImage == null || screenToImage.length < 6) {
@@ -143,7 +141,7 @@ public final class CheckerShader implements AutoCloseable {
         try {
             GLProgram p = program();
             p.use();
-            p.setVec2("uViewport", (float) viewportW, (float) viewportH);
+            p.setVec2("uViewport", (float)(fboWidth / dpi), (float)(fboHeight / dpi));
             p.setMat2D("uScreenToImage", screenToImage);
             p.setVec4("uImage", x, y, imageWidth, imageHeight);
             p.setFloat("uGrid", grid);
