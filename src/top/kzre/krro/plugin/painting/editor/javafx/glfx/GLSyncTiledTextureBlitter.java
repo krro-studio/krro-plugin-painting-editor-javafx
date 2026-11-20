@@ -41,11 +41,13 @@ public class GLSyncTiledTextureBlitter implements AutoCloseable {
     /**
      * 在 GLCanvas 的 GL 线程消费最新一帧；没有新帧时什么都不做。
      */
-    public void poll(GLRenderEvent event) {
+    public boolean poll(GLRenderEvent event) {
         IFrameDraw draw = frameChan.poll();
         if (draw != null) {
             draw.consume(blitter, event);
+            return true;
         }
+        return false;
     }
 
     public void send(TiledCanvas canvas, double width, double height){

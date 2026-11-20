@@ -1,34 +1,35 @@
 (ns top.kzre.krro.plugin.painting.editor.javafx.canvas.gl-canvas-kernel
   (:require
-   [taoensso.timbre :as log]
-   [top.kzre.krro.core.util.promise :as promise :refer [plet plet>]]
-   [top.kzre.krro.plugin.painting.core.changes.viewport :as viewport]
-   [top.kzre.krro.plugin.painting.core.project.canvas :as pc]
-   [top.kzre.krro.plugin.painting.core.schedule.executor :as executor]
-   [top.kzre.krro.plugin.painting.core.schedule.scheduler-impl :as scheduler-impl]
-   [top.kzre.krro.plugin.painting.core.viewport :as vp]
-   [top.kzre.krro.plugin.painting.editor.javafx.canvas.gl :as gl]
-   [top.kzre.krro.plugin.painting.editor.javafx.canvas.protocol :as proto :refer [ICanvasKernel]]
-   [top.kzre.krro.plugin.painting.editor.javafx.input.pointer :as pointer]
-   [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input])
+    [taoensso.timbre :as log]
+    [top.kzre.krro.core.util.promise :as promise :refer [plet plet>]]
+    [top.kzre.krro.plugin.painting.core.changes.viewport :as viewport]
+    [top.kzre.krro.plugin.painting.core.project.canvas :as pc]
+    [top.kzre.krro.plugin.painting.core.schedule.executor :as executor]
+    [top.kzre.krro.plugin.painting.core.schedule.scheduler-impl :as scheduler-impl]
+    [top.kzre.krro.plugin.painting.core.viewport :as vp]
+    [top.kzre.krro.plugin.painting.editor.javafx.canvas.gl :as gl]
+    [top.kzre.krro.plugin.painting.editor.javafx.canvas.protocol :as proto :refer [ICanvasKernel]]
+    [top.kzre.krro.plugin.painting.editor.javafx.input.pointer :as pointer]
+    [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input])
   (:import
-   (com.huskerdev.grapl.gl GLContext GLProfile)
-   (com.huskerdev.openglfx.canvas GLCanvas GLCanvas$Builder GLCanvas$Builder$ContextDescription$New)
-   (com.huskerdev.openglfx.canvas.events GLRenderEvent)
-   (com.huskerdev.openglfx.lwjgl LWJGLExecutor)
-   (java.lang AutoCloseable)
-   (java.util.concurrent Callable)
-   (java.util.function Consumer)
-   (javafx.scene.canvas Canvas)
-   (javafx.scene.layout StackPane)
-   (top.kzre.krro.canvas.gl.tile TiledTextureNormalBlitter)
-   (top.kzre.krro.core.util SerialExecutor)
-   (top.kzre.krro.plugin.painting.editor.javafx.glfx
-    CheckerDraw
-    CheckerShader
-    ClearDraw
-    GLRuntime
-    GLSyncTiledTextureBlitter)))
+    (com.huskerdev.grapl.gl GLContext GLProfile)
+    (com.huskerdev.openglfx.canvas GLCanvas GLCanvas$Builder GLCanvas$Builder$ContextDescription$New)
+    (com.huskerdev.openglfx.canvas.events GLRenderEvent)
+    (com.huskerdev.openglfx.lwjgl LWJGLExecutor)
+    (java.lang AutoCloseable)
+    (java.util.concurrent Callable)
+    (java.util.function Consumer)
+    (javafx.application Platform)
+    (javafx.scene.canvas Canvas)
+    (javafx.scene.layout StackPane)
+    (top.kzre.krro.canvas.gl.tile TiledTextureNormalBlitter)
+    (top.kzre.krro.core.util SerialExecutor)
+    (top.kzre.krro.plugin.painting.editor.javafx.glfx
+      CheckerDraw
+      CheckerShader
+      ClearDraw
+      GLRuntime
+      GLSyncTiledTextureBlitter)))
 
 
 ;; ═══════════════════════════════════════════════
@@ -171,7 +172,6 @@
   (repaint [this changes]
     ;; 异步渲染，请求重绘
     (plet> [_ (request-render! this changes)]
-           ;; 内部会自己调度，这里是线程安全的
            (.repaint gl-canvas)))
 
   (close [_]
@@ -249,12 +249,8 @@
         (build-layout gl-runtime)
 
         render-task-id (str "gl-canvas-kernel-" (random-uuid))
-        ;; blitter 与棋盘格资源都跟 GLCanvas 的会话同寿，由 kernel 持有；
-        ;; 通道只投递帧，不再代管它们
         gl-blitter     (TiledTextureNormalBlitter. (int pc/global-tile-size))
         checker        (CheckerShader. gray-bg (first checker-colors) (second checker-colors))
-        ;; 空画布时清成完全透明——棋盘格靠 dst-over 垫在已有像素之下，
-        ;; 这里若清成不透明的灰，它就无处可落了
         sync-blitter   (GLSyncTiledTextureBlitter/create gl-blitter)
         mouse-input    (pointer/make-pointer-input container on-event)
 
@@ -281,15 +277,16 @@
     (.addOnInitEvent
       gl-canvas
       (reify Consumer
-        (accept [_ event]
+        (accept [_ _event]
           (swap! state-atom assoc :gl-canvas-ready? true)
-          (proto/repaint kernel [(viewport/refreshed)]))))
+          (proto/repaint kernel [(viewport/refreshed)])
+          )))
 
     ;; ── onRenderEvent：GLCanvas 的 GL 线程，消费最新一帧 ──
     (.addOnRenderEvent
       gl-canvas
       (reify Consumer
-        (accept [_ event]
+        (^void accept [_ event]
           (.poll ^GLSyncTiledTextureBlitter sync-blitter
                  ^GLRenderEvent event))))
 
@@ -298,14 +295,8 @@
       gl-canvas
       (reify Consumer
         (accept [_ _]
-          ;; 同步渲染，但不请求重绘(这会导致glfx卡死)
-          (try
-            (promise/await
-              (request-render! kernel [(viewport/refreshed)]))
-            (catch Exception e
-              ;; 异常警告，然后静默
-              (log/warn e)))
-          )))
+          ;; 不请求重绘,这里重绘得越多越闪烁,发一个旧帧,然后启动渲染
+          (request-render! kernel [(viewport/refreshed)]))))
 
     (input/start! mouse-input)
 
