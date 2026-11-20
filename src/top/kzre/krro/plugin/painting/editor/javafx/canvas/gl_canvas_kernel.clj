@@ -1,15 +1,14 @@
 (ns top.kzre.krro.plugin.painting.editor.javafx.canvas.gl-canvas-kernel
   (:require
    [taoensso.timbre :as log]
-   [top.kzre.krro.core.util.channel :refer [<| >| chan close!]]
-   [top.kzre.krro.core.util.promise :as promise :refer [plet]]
+   [top.kzre.krro.core.util.promise :as promise :refer [plet plet>]]
    [top.kzre.krro.plugin.painting.core.changes.viewport :as viewport]
    [top.kzre.krro.plugin.painting.core.project.canvas :as pc]
    [top.kzre.krro.plugin.painting.core.schedule.executor :as executor]
    [top.kzre.krro.plugin.painting.core.schedule.scheduler-impl :as scheduler-impl]
    [top.kzre.krro.plugin.painting.core.viewport :as vp]
    [top.kzre.krro.plugin.painting.editor.javafx.canvas.gl :as gl]
-   [top.kzre.krro.plugin.painting.editor.javafx.canvas.protocol :refer [ICanvasKernel]]
+   [top.kzre.krro.plugin.painting.editor.javafx.canvas.protocol :as proto :refer [ICanvasKernel]]
    [top.kzre.krro.plugin.painting.editor.javafx.input.pointer :as pointer]
    [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input])
   (:import
@@ -20,7 +19,6 @@
    (java.lang AutoCloseable)
    (java.util.concurrent Callable)
    (java.util.function Consumer)
-   (javafx.application Platform)
    (javafx.scene.canvas Canvas)
    (javafx.scene.layout StackPane)
    (top.kzre.krro.canvas.gl.tile TiledTextureNormalBlitter)
@@ -49,13 +47,14 @@
 ;; 格子边长取瓦片尺寸：放大到格子小于几个像素时不再有意义，缩小时代数够用。
 (def ^:private checker-grid pc/global-tile-size)
 
-(defn- make-state []
+(defn- make-state-atom []
   (atom {:layers           nil
          :current-layer-id nil
          :image-width      0
          :image-height     0
          :viewport         nil
-         :closed           false}))
+         :closed           false
+         :gl-canvas-ready? false}))
 
 ;; ═══════════════════════════════════════════════
 ;; 渲染请求
@@ -71,56 +70,61 @@
            render-task-id
            state-atom]
     :as _kernel} changes]
-  (let [{:keys [layers current-layer-id
+  (let [{:keys [gl-canvas-ready?
+                layers current-layer-id
                 image-width image-height
-                viewport]}
-        @state-atom
-        ^SerialExecutor gl-exec (.getExecutor ^GLRuntime gl-runtime)
+                viewport]} @state-atom
         viewport-w (int (.getWidth gl-canvas))
         viewport-h (int (.getHeight gl-canvas))
-        ;; 画布还没建立时图像尺寸未知（首帧、reshap 早于 set-image-size!），
-        ;; 退化成整个视口——合成侧本来就这么取，棋盘格跟着同一个值，
-        ;; 否则 uImage 是 0x0，每个像素都算"图像范围外"，只剩一片灰。
-        image-w (if (pos? image-width) image-width viewport-w)
-        image-h (if (pos? image-height) image-height viewport-h)
-        view-mat2d-inv
-        (vp/viewport->mat2d-invert
-          (or viewport (vp/make-viewport)))]
-    (plet
-      [canvas
-       (executor/submit!
-         render-task-id
-         scheduler
-         layers
-         :changes          changes
-         :image-width      image-w
-         :image-height     image-h
-         :current-layer-id current-layer-id
-         :viewport         viewport
-         :viewport-w       viewport-w
-         :viewport-h       viewport-h)
+        render-ready?
+        (and
+          gl-canvas-ready?
+          (pos? viewport-w)
+          (pos? viewport-h)
+          (pos? image-width)
+          (pos? image-height))]
+    ;; 无效的绘制状态下直接放弃
+    (if render-ready?
+      (let [^SerialExecutor gl-exec (.getExecutor ^GLRuntime gl-runtime)
+            view-mat2d-inv
+            (vp/viewport->mat2d-invert
+              (or viewport (vp/make-viewport)))]
+        (plet
+          [canvas
+           (executor/submit!
+             render-task-id
+             scheduler
+             layers
+             :changes          changes
+             :image-width      image-width
+             :image-height     image-height
+             :current-layer-id current-layer-id
+             :viewport         viewport
+             :viewport-w       viewport-w
+             :viewport-h       viewport-h)
 
-       _
-       (promise/from-completable-future
-         (.submit
-           gl-exec
-           ^Callable
-           (fn []
-             ;; 帧提交 + fence 全部封装在 send 内部。没有合成结果时传 nil——
-             ;; send 会退化成只投递背景，棋盘格因此首帧就能出现，
-             ;; 不必等到第一次有内容的重绘
-             (let [canvas (when (and canvas (not (.isClosed canvas))) canvas)]
-               (.send ^GLSyncTiledTextureBlitter sync-blitter
-                      canvas
-                      (double viewport-w)
-                      (double viewport-h)
-                      (CheckerDraw. (ClearDraw/fromRgba gray-bg)
-                        checker (int checker-grid)
-                        0 0 image-w image-h
-                        viewport-w viewport-h
-                        view-mat2d-inv))))))]
-      ;; 内部会自己调度，这里是线程安全的
-      (.repaint gl-canvas))))
+           _
+           (promise/from-completable-future
+             (.submit
+               gl-exec
+               ^Callable
+               (fn []
+                 ;; 帧提交 + fence 全部封装在 send 内部。没有合成结果时传 nil——
+                 ;; send 会退化成只投递背景，棋盘格因此首帧就能出现，
+                 ;; 不必等到第一次有内容的重绘
+                 (let [canvas (when (and canvas (not (.isClosed canvas))) canvas)]
+                   (.send ^GLSyncTiledTextureBlitter sync-blitter
+                          canvas
+                          (double viewport-w)
+                          (double viewport-h)
+                          (CheckerDraw. (ClearDraw/fromRgba gray-bg)
+                                        checker (int checker-grid)
+                                        0 0 image-width image-height
+                                        viewport-w viewport-h
+                                        view-mat2d-inv))))))]))
+      ;; 已经放弃的
+      (promise/rejected
+        (ex-info "invalid render state" {})))))
 
 ;; ═══════════════════════════════════════════════
 ;; 协议实现
@@ -165,8 +169,10 @@
     (.getGraphicsContext2D overlay-canvas))
 
   (repaint [this changes]
-    ;; 异步绘制
-    (request-render! this changes))
+    ;; 异步渲染，请求重绘
+    (plet> [_ (request-render! this changes)]
+           ;; 内部会自己调度，这里是线程安全的
+           (.repaint gl-canvas)))
 
   (close [_]
     (let [[old _] (swap-vals! state-atom assoc :closed true)]
@@ -257,7 +263,7 @@
                           :gl-composite-context-promise
                           (gl/glfx-composite-context-promise)})
 
-
+        state-atom (make-state-atom)
         kernel
         (map->GLCanvasKernalImpl
           {:gl-canvas      gl-canvas
@@ -270,7 +276,14 @@
            :render-task-id render-task-id
            :on-event       on-event
            :mouse-input    mouse-input
-           :state-atom     (make-state)})]
+           :state-atom     state-atom})]
+
+    (.addOnInitEvent
+      gl-canvas
+      (reify Consumer
+        (accept [_ event]
+          (swap! state-atom assoc :gl-canvas-ready? true)
+          (proto/repaint kernel [(viewport/refreshed)]))))
 
     ;; ── onRenderEvent：GLCanvas 的 GL 线程，消费最新一帧 ──
     (.addOnRenderEvent
@@ -285,8 +298,14 @@
       gl-canvas
       (reify Consumer
         (accept [_ _]
-          (promise/await
-            (request-render! kernel [(viewport/refreshed)])))))
+          ;; 同步渲染，但不请求重绘(这会导致glfx卡死)
+          (try
+            (promise/await
+              (request-render! kernel [(viewport/refreshed)]))
+            (catch Exception e
+              ;; 异常警告，然后静默
+              (log/warn e)))
+          )))
 
     (input/start! mouse-input)
 
