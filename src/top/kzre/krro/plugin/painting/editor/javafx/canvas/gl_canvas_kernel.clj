@@ -1,32 +1,36 @@
 (ns top.kzre.krro.plugin.painting.editor.javafx.canvas.gl-canvas-kernel
   (:require
-    [taoensso.timbre :as log]
-    [top.kzre.krro.core.util.channel :refer [<| >| chan close!]]
-    [top.kzre.krro.core.util.promise :as promise :refer [plet>]]
-    [top.kzre.krro.plugin.painting.core.changes.viewport :as viewport]
-    [top.kzre.krro.plugin.painting.core.project.canvas :as pc]
-    [top.kzre.krro.plugin.painting.core.schedule.executor :as executor]
-    [top.kzre.krro.plugin.painting.core.schedule.scheduler-impl :as scheduler-impl]
-    [top.kzre.krro.plugin.painting.core.viewport :as vp]
-    [top.kzre.krro.plugin.painting.editor.javafx.canvas.gl :as gl]
-    [top.kzre.krro.plugin.painting.editor.javafx.canvas.protocol :refer [ICanvasKernel]]
-    [top.kzre.krro.plugin.painting.editor.javafx.input.pointer :as pointer]
-    [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input])
+   [taoensso.timbre :as log]
+   [top.kzre.krro.core.util.channel :refer [<| >| chan close!]]
+   [top.kzre.krro.core.util.promise :as promise :refer [plet]]
+   [top.kzre.krro.plugin.painting.core.changes.viewport :as viewport]
+   [top.kzre.krro.plugin.painting.core.project.canvas :as pc]
+   [top.kzre.krro.plugin.painting.core.schedule.executor :as executor]
+   [top.kzre.krro.plugin.painting.core.schedule.scheduler-impl :as scheduler-impl]
+   [top.kzre.krro.plugin.painting.core.viewport :as vp]
+   [top.kzre.krro.plugin.painting.editor.javafx.canvas.gl :as gl]
+   [top.kzre.krro.plugin.painting.editor.javafx.canvas.protocol :refer [ICanvasKernel]]
+   [top.kzre.krro.plugin.painting.editor.javafx.input.pointer :as pointer]
+   [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input])
   (:import
-    (com.huskerdev.grapl.gl GLContext GLProfile)
-    (com.huskerdev.openglfx.canvas GLCanvas GLCanvas$Builder GLCanvas$Builder$ContextDescription$New)
-    (com.huskerdev.openglfx.canvas.events GLRenderEvent)
-    (com.huskerdev.openglfx.lwjgl LWJGLExecutor)
-    (java.lang AutoCloseable)
-    (java.util.concurrent Callable)
-    (java.util.function Consumer)
-    (javafx.application Platform)
-    (javafx.scene.canvas Canvas)
-    (javafx.scene.layout StackPane)
-    (top.kzre.krro.canvas.gl.tile TiledTextureNormalBlitter)
-    (top.kzre.krro.core.util SerialExecutor)
-    (top.kzre.krro.plugin.painting.editor.javafx.glfx
-      CheckerDraw CheckerShader ClearDraw GLRuntime GLSyncTiledTextureBlitter)))
+   (com.huskerdev.grapl.gl GLContext GLProfile)
+   (com.huskerdev.openglfx.canvas GLCanvas GLCanvas$Builder GLCanvas$Builder$ContextDescription$New)
+   (com.huskerdev.openglfx.canvas.events GLRenderEvent)
+   (com.huskerdev.openglfx.lwjgl LWJGLExecutor)
+   (java.lang AutoCloseable)
+   (java.util.concurrent Callable)
+   (java.util.function Consumer)
+   (javafx.application Platform)
+   (javafx.scene.canvas Canvas)
+   (javafx.scene.layout StackPane)
+   (top.kzre.krro.canvas.gl.tile TiledTextureNormalBlitter)
+   (top.kzre.krro.core.util SerialExecutor)
+   (top.kzre.krro.plugin.painting.editor.javafx.glfx
+    CheckerDraw
+    CheckerShader
+    ClearDraw
+    GLRuntime
+    GLSyncTiledTextureBlitter)))
 
 
 ;; ═══════════════════════════════════════════════
@@ -60,7 +64,7 @@
 (defn- request-render!
   [{:keys [sync-blitter
            checker
-           repaint-chan
+
            gl-runtime
            gl-canvas
            scheduler
@@ -82,7 +86,7 @@
         view-mat2d-inv
         (vp/viewport->mat2d-invert
           (or viewport (vp/make-viewport)))]
-    (plet>
+    (plet
       [canvas
        (executor/submit!
          render-task-id
@@ -115,12 +119,8 @@
                         0 0 image-w image-h
                         viewport-w viewport-h
                         view-mat2d-inv))))))]
-      (>| repaint-chan :dirty)
-      (Platform/runLater
-        (reify Runnable
-          (run [_]
-            (when (<| repaint-chan)
-              (.repaint gl-canvas))))))))
+      ;; 内部会自己调度，这里是线程安全的
+      (.repaint gl-canvas))))
 
 ;; ═══════════════════════════════════════════════
 ;; 协议实现
@@ -138,7 +138,7 @@
    ^CheckerShader checker
    scheduler
    render-task-id
-   repaint-chan
+
    ;; 业务相关
    on-event
    mouse-input
@@ -165,6 +165,7 @@
     (.getGraphicsContext2D overlay-canvas))
 
   (repaint [this changes]
+    ;; 异步绘制
     (request-render! this changes))
 
   (close [_]
@@ -175,7 +176,6 @@
                       (when mouse-input #(input/stop! mouse-input))
                       (when scheduler #(.close ^AutoCloseable scheduler))
                       ;; 消费者按消费流逆序关闭 repaint->blitter
-                      #(close! repaint-chan)
                       (when sync-blitter
                         #(try
                            (.close ^GLSyncTiledTextureBlitter sync-blitter)
@@ -257,7 +257,6 @@
                           :gl-composite-context-promise
                           (gl/glfx-composite-context-promise)})
 
-        repaint-chan   (chan 1)
 
         kernel
         (map->GLCanvasKernalImpl
@@ -269,7 +268,6 @@
            :checker        checker
            :scheduler      scheduler
            :render-task-id render-task-id
-           :repaint-chan   repaint-chan
            :on-event       on-event
            :mouse-input    mouse-input
            :state-atom     (make-state)})]
@@ -287,7 +285,8 @@
       gl-canvas
       (reify Consumer
         (accept [_ _]
-          (request-render! kernel [(viewport/refreshed)]))))
+          (promise/await
+            (request-render! kernel [(viewport/refreshed)])))))
 
     (input/start! mouse-input)
 
