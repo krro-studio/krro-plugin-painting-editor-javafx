@@ -20,7 +20,7 @@ import static org.lwjgl.opengl.GL30.glBindFramebuffer;
  * 棋盘格是纯程序化图形，不采样任何纹理，所以只需要一次全屏 quad。
  *
  * <p><b>绘制顺序</b>：本类是背景——画在 {@link ClearDraw} 之上、
- * {@link FrameDraw} 的合成纹理之下。它不透明地铺满视口（图像范围内
+ * {@link IFrameDraw} 的合成纹理之下。它不透明地铺满视口（图像范围内
  * 是格子，范围外是灰），之上的纹理由 normal 混合按自身 alpha 盖上来，
  * 透明处自然露出格子。
  *
@@ -124,7 +124,7 @@ public final class CheckerShader implements AutoCloseable {
      * @param screenToImage 逻辑屏幕 -> 图像坐标的 6 元素仿射逆矩阵
      */
     public void draw(int fbo, int fboWidth, int fboHeight,
-                     int viewportW, int viewportH,
+                     double viewportW, double viewportH,
                      int x, int y, int imageWidth, int imageHeight, int grid,
                      float[] screenToImage) {
         if (closed) {
@@ -143,7 +143,7 @@ public final class CheckerShader implements AutoCloseable {
         try {
             GLProgram p = program();
             p.use();
-            p.setVec2("uViewport", viewportW, viewportH);
+            p.setVec2("uViewport", (float) viewportW, (float) viewportH);
             p.setMat2D("uScreenToImage", screenToImage);
             p.setVec4("uImage", x, y, imageWidth, imageHeight);
             p.setFloat("uGrid", grid);

@@ -19,7 +19,6 @@
     (java.lang AutoCloseable)
     (java.util.concurrent Callable)
     (java.util.function Consumer)
-    (javafx.application Platform)
     (javafx.scene.canvas Canvas)
     (javafx.scene.layout StackPane)
     (top.kzre.krro.canvas.gl.tile TiledTextureNormalBlitter)
@@ -29,7 +28,8 @@
       CheckerShader
       ClearDraw
       GLRuntime
-      GLSyncTiledTextureBlitter)))
+      FrameBlitter)
+    (top.kzre.krro.util.tile TiledCanvas)))
 
 
 ;; ═══════════════════════════════════════════════
@@ -54,31 +54,73 @@
          :image-width      0
          :image-height     0
          :viewport         nil
-         :closed           false
-         :gl-canvas-ready? false}))
+         :closed?           false
+         :gl-canvas-ready? false
+         ;; 最近一帧的拷贝
+         :last-canvas nil
+         }))
 
 ;; ═══════════════════════════════════════════════
 ;; 渲染请求
 ;; ═══════════════════════════════════════════════
+(defn- render-cached!
+  "用缓存的画布去绘制"
+  [{:keys [sync-blitter
+           checker-shader
+           gl-canvas
+           state-atom]
+    :as _kernel}]
+  (let [{:keys [gl-canvas-ready? closed?
+               ^TiledCanvas last-canvas
+                image-width image-height
+                viewport]} @state-atom
+        viewport-w (.getWidth gl-canvas)
+        viewport-h (.getHeight gl-canvas)
+        render-ready?
+        (and
+          (not closed?)
+          gl-canvas-ready?
+          (some? last-canvas)
+          (not (.isClosed last-canvas))
+          (pos? viewport-w)
+          (pos? viewport-h)
+          (pos? image-width)
+          (pos? image-height))
+        view-mat2d-inv
+        (vp/viewport->mat2d-invert
+          (or viewport (vp/make-viewport)))]
+    (when render-ready?
+      (let [canvas (.copy last-canvas)]
+        (.send ^FrameBlitter sync-blitter
+               canvas
+               (double viewport-w)
+               (double viewport-h)
+               (CheckerDraw. (ClearDraw/fromRgba gray-bg)
+                             checker-shader (int checker-grid)
+                             0 0 image-width image-height
+                             viewport-w viewport-h
+                             view-mat2d-inv)
+               (FrameBlitter/scaled gl-canvas))))
+    ))
 
 (defn- request-render!
   [{:keys [sync-blitter
-           checker
-
+           checker-shader
            gl-runtime
            gl-canvas
            scheduler
            render-task-id
            state-atom]
     :as _kernel} changes]
-  (let [{:keys [gl-canvas-ready?
+  (let [{:keys [gl-canvas-ready? closed?
                 layers current-layer-id
                 image-width image-height
                 viewport]} @state-atom
-        viewport-w (int (.getWidth gl-canvas))
-        viewport-h (int (.getHeight gl-canvas))
+        viewport-w (.getWidth gl-canvas)
+        viewport-h (.getHeight gl-canvas)
         render-ready?
         (and
+          (not closed?)
           gl-canvas-ready?
           (pos? viewport-w)
           (pos? viewport-h)
@@ -113,16 +155,23 @@
                  ;; 帧提交 + fence 全部封装在 send 内部。没有合成结果时传 nil——
                  ;; send 会退化成只投递背景，棋盘格因此首帧就能出现，
                  ;; 不必等到第一次有内容的重绘
-                 (let [canvas (when (and canvas (not (.isClosed canvas))) canvas)]
-                   (.send ^GLSyncTiledTextureBlitter sync-blitter
+                 (let [^TiledCanvas canvas canvas
+                       copy (.copy canvas)
+                       [old _] (swap-vals! state-atom assoc :last-canvas copy)]
+                   ;; 保留旧帧
+                   (when-let [cached-canvas (:last-canvas old)]
+                     (when-not (.isClosed cached-canvas)
+                       (.close cached-canvas)))
+                   (.send ^FrameBlitter sync-blitter
                           canvas
                           (double viewport-w)
                           (double viewport-h)
                           (CheckerDraw. (ClearDraw/fromRgba gray-bg)
-                                        checker (int checker-grid)
+                                        checker-shader (int checker-grid)
                                         0 0 image-width image-height
                                         viewport-w viewport-h
-                                        view-mat2d-inv))))))]))
+                                        view-mat2d-inv)
+                          (FrameBlitter/stretched))))))]))
       ;; 已经放弃的
       (promise/rejected
         (ex-info "invalid render state" {})))))
@@ -137,10 +186,10 @@
    ^GLCanvas gl-canvas
    ^Canvas overlay-canvas
    ^StackPane fx-container
-   ^GLSyncTiledTextureBlitter sync-blitter
+   ^FrameBlitter sync-blitter
    ;; 合成相关
    ^GLRuntime gl-runtime
-   ^CheckerShader checker
+   ^CheckerShader checker-shader
    scheduler
    render-task-id
 
@@ -175,8 +224,8 @@
            (.repaint gl-canvas)))
 
   (close [_]
-    (let [[old _] (swap-vals! state-atom assoc :closed true)]
-      (when-not (:closed old)
+    (let [[old _] (swap-vals! state-atom assoc :closed? true)]
+      (when-not (:closed? old)
         (doseq [step [
                       ;; 立刻关生产者，不再产出新数据
                       (when mouse-input #(input/stop! mouse-input))
@@ -184,15 +233,20 @@
                       ;; 消费者按消费流逆序关闭 repaint->blitter
                       (when sync-blitter
                         #(try
-                           (.close ^GLSyncTiledTextureBlitter sync-blitter)
+                           (.close ^FrameBlitter sync-blitter)
                            (catch Throwable t
                              (log/warn t "sync-blitter close failed"))))
-                      ;; kernel 自持的 GLCanvas 会话资源
-                      (when checker
+                      (when-let [^TiledCanvas cached (:last-canvas old)]
                         #(try
-                           (.close ^CheckerShader checker)
+                           (.close cached)
                            (catch Throwable t
-                             (log/warn t "checker close failed"))))
+                             (log/warn t "last-canvas close failed"))))
+                      ;; kernel 自持的 GLCanvas 会话资源
+                      (when checker-shader
+                        #(try
+                           (.close ^CheckerShader checker-shader)
+                           (catch Throwable t
+                             (log/warn t "checker-shader close failed"))))
                       ;; 最后关上下文
                       (when gl-canvas #(.dispose ^GLCanvas gl-canvas))]]
           (when step
@@ -249,9 +303,9 @@
         (build-layout gl-runtime)
 
         render-task-id (str "gl-canvas-kernel-" (random-uuid))
-        gl-blitter     (TiledTextureNormalBlitter. (int pc/global-tile-size))
-        checker        (CheckerShader. gray-bg (first checker-colors) (second checker-colors))
-        sync-blitter   (GLSyncTiledTextureBlitter/create gl-blitter)
+
+        checker-shader        (CheckerShader. gray-bg (first checker-colors) (second checker-colors))
+        sync-blitter   (FrameBlitter/create (int pc/global-tile-size))
         mouse-input    (pointer/make-pointer-input container on-event)
 
         scheduler      (scheduler-impl/make-scheduler
@@ -267,7 +321,7 @@
            :fx-container   container
            :sync-blitter   sync-blitter
            :gl-runtime     gl-runtime
-           :checker        checker
+           :checker-shader        checker-shader
            :scheduler      scheduler
            :render-task-id render-task-id
            :on-event       on-event
@@ -287,7 +341,7 @@
       gl-canvas
       (reify Consumer
         (^void accept [_ event]
-          (.poll ^GLSyncTiledTextureBlitter sync-blitter
+          (.poll ^FrameBlitter sync-blitter
                  ^GLRenderEvent event))))
 
     ;; ── onReshapeEvent：surface 尺寸变化，触发一次重渲染 ──
@@ -295,8 +349,9 @@
       gl-canvas
       (reify Consumer
         (accept [_ _]
-          ;; 不请求重绘,这里重绘得越多越闪烁,发一个旧帧,然后启动渲染
-          (request-render! kernel [(viewport/refreshed)]))))
+          ;; 先用缓存绘制,在请求重新渲染
+          (render-cached! kernel)
+          (proto/repaint kernel [(viewport/refreshed)]))))
 
     (input/start! mouse-input)
 

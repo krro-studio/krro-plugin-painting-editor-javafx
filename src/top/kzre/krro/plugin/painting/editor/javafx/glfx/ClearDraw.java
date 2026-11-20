@@ -46,7 +46,7 @@ public final class ClearDraw implements IFrameDraw {
      * @param event   当前 GLCanvas 渲染事件，提供目标 FBO
      */
     @Override
-    public void consume(ITiledTextureBlitter blitter, GLRenderEvent event) {
+    public void consume(FrameBlitter blitter, GLRenderEvent event) {
         if (event == null) throw new IllegalArgumentException("event can't be null.");
 
         // 绑定目标 FBO

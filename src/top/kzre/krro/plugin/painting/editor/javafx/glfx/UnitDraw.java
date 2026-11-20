@@ -14,7 +14,7 @@ public final class UnitDraw implements IFrameDraw{
     }
 
     @Override
-    public void consume(ITiledTextureBlitter blitter, GLRenderEvent event) {
+    public void consume(FrameBlitter blitter, GLRenderEvent event) {
 
     }
 

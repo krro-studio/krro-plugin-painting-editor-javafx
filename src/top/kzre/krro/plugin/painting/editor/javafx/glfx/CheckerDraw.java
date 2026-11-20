@@ -37,14 +37,14 @@ public final class CheckerDraw implements IFrameDraw {
     private final int width;
     private final int height;
     /// 逻辑视口尺寸（DIP）——mat2d 所在的坐标空间，不是 framebuffer 物理尺寸
-    private final int viewportW;
-    private final int viewportH;
+    private final double viewportW;
+    private final double viewportH;
     /// 视口变换的逆：逻辑屏幕 -> 图像坐标
     private final float[] mat2d;
 
     public CheckerDraw(IFrameDraw backgroundDraw, CheckerShader shader, int gridSize,
-                       int x, int y, int width, int height,
-                       int viewportW, int viewportH, float[] mat2d) {
+                       int x, int y, int imageW, int imageH,
+                       double viewportW, double viewportH, float[] mat2d) {
         if (backgroundDraw == null) throw new IllegalArgumentException("backgroundDraw can't be null");
         if (shader == null) throw new IllegalArgumentException("shader can't be null");
         if (gridSize <= 0) throw new IllegalArgumentException("gridSize must be > 0: " + gridSize);
@@ -53,8 +53,8 @@ public final class CheckerDraw implements IFrameDraw {
         this.gridSize = gridSize;
         this.x = x;
         this.y = y;
-        this.width = width;
-        this.height = height;
+        this.width = imageW;
+        this.height = imageH;
         this.viewportW = viewportW;
         this.viewportH = viewportH;
         this.mat2d = mat2d;
@@ -66,7 +66,7 @@ public final class CheckerDraw implements IFrameDraw {
     }
 
     @Override
-    public void consume(ITiledTextureBlitter blitter, GLRenderEvent event) {
+    public void consume(FrameBlitter blitter, GLRenderEvent event) {
         if (event == null) throw new IllegalArgumentException("event can't be null.");
         backgroundDraw.consume(blitter, event);
         // 光栅化范围用 framebuffer 物理尺寸，格子计算用逻辑视口——两者只在缩放屏下不一致

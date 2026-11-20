@@ -1,5 +1,6 @@
 (ns top.kzre.krro.plugin.painting.editor.javafx.input.pointer
-  "JavaFX 平台指针输入源（缓冲模式）：所有事件转换为标准事件并追加到原子缓冲区。"
+  "JavaFX 平台指针输入源（缓冲模式）：所有事件转换为标准事件并追加到原子缓冲区。
+  注意，事件坐标不考虑DPI, 一律按UI大小算"
   (:require
    [top.kzre.krro.plugin.painting.core.event :as event]
    [top.kzre.krro.plugin.painting.editor.javafx.input.protocol :as input])
